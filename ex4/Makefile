@@ -1,6 +1,6 @@
 CC=gcc
 CFLAGS=-fopenmp
-EXE=matrix_mul
+EXE=matmul
 SRCS=matmul.c
 
 all:
