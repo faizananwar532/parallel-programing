@@ -17,11 +17,11 @@
 #SBATCH --error=/home/fd0002007/out/pi_seq.err.%j
 
 export OMP_NUM_THREADS=4
-NUM_STEPS=100000
+NUM_STEPS=1000000
 cd /home/fd0002007/parallel-programing/ex5
 chmod +x pi_seq pi_par
-echo "Running sequential version with $(NUM_STEPS) steps:"
-./pi_seq $(NUM_STEPS)
+echo "Running sequential version with ${NUM_STEPS} steps:"
+./pi_seq ${NUM_STEPS}
 echo ""
-echo "Running parallel version with $(NUM_STEPS) steps:"
-./pi_par $(NUM_STEPS)
+echo "Running parallel version with ${NUM_STEPS} steps:"
+./pi_par ${NUM_STEPS}

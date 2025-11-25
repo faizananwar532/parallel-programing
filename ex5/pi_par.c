@@ -26,11 +26,17 @@ int main(int argc, char **argv) {
     
     step = 1.0 / (double) num_steps;
     
+    int actual_threads = 0;
     #pragma omp parallel
     {
         int thread_id = omp_get_thread_num();
         int total_threads = omp_get_num_threads();
         double partial_sum = 0.0;
+        
+        // Store actual number of threads (only first thread needs to do this)
+        if (thread_id == 0) {
+            actual_threads = total_threads;
+        }
         
         // Block decomposition: each thread processes a contiguous block
         long start = (thread_id * num_steps) / total_threads;
@@ -42,11 +48,13 @@ int main(int argc, char **argv) {
         }
         
         // Store partial sum in array (each thread writes to its own index)
-        partial_sums[thread_id] = partial_sum;
+        if (thread_id < 4) {
+            partial_sums[thread_id] = partial_sum;
+        }
     }
 
     // Combine all partial sums after parallel region
-    for (i = 0; i < num_threads; i++) {
+    for (i = 0; i < actual_threads; i++) {
         sum = sum + partial_sums[i];
     }
 
@@ -54,7 +62,7 @@ int main(int argc, char **argv) {
     time = omp_get_wtime() - time;
     
     printf("Approximation of Pi:%.10f\n", pi);
-    printf("Time: %f seconds with %d threads\n", time, num_threads);
+    printf("Time: %f seconds with %d threads\n", time, actual_threads);
     printf("Number of steps: %ld\n", num_steps);
     
     return 0;
