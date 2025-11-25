@@ -1,13 +1,23 @@
 #include <omp.h>
 #include <stdio.h>
+#include <stdlib.h>
 
-static long num_steps = 100000;
 double step;
 
-int main() {
+int main(int argc, char **argv) {
     long i;
+    long num_steps = 100000; // Default value
     double x, pi, sum = 0.0;
     double time;
+
+    // Parse command-line argument for num_steps
+    if (argc > 1) {
+        num_steps = atol(argv[1]);
+        if (num_steps <= 0) {
+            fprintf(stderr, "Error: num_steps must be positive\n");
+            return 1;
+        }
+    }
 
     time = omp_get_wtime();
     
@@ -22,6 +32,7 @@ int main() {
     
     printf("Approximation of Pi:%.10f\n", pi);
     printf("Time: %f seconds\n", time);
+    printf("Number of steps: %ld\n", num_steps);
     
     return 0;
 }
