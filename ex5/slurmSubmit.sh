@@ -17,6 +17,6 @@
 #SBATCH --error=/home/fd0002007/out/pi_seq.err.%j
 
 export OMP_NUM_THREADS=1
-#cd /path/to/bin
+cd /home/fd0002007/parallel-programing/ex5
 chmod +x pi_seq
 ./pi_seq
