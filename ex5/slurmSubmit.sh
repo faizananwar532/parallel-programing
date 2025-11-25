@@ -18,5 +18,9 @@
 
 export OMP_NUM_THREADS=4
 cd /home/fd0002007/parallel-programing/ex5
-chmod +x pi_seq
+chmod +x pi_seq pi_par
+echo "Running sequential version:"
 ./pi_seq
+echo ""
+echo "Running parallel version:"
+./pi_par

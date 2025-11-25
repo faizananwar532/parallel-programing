@@ -1,13 +1,17 @@
 CC=gcc
 CFLAGS=-fopenmp
-EXE=pi_seq
-SRCS=pi_seq.c
 
-all:
-	$(CC) $(CFLAGS) $(SRCS) -o $(EXE)
+all: pi_seq pi_par
 
-run:
-	./$(EXE)
+pi_seq: pi_seq.c
+	$(CC) $(CFLAGS) pi_seq.c -o pi_seq
+
+pi_par: pi_par.c
+	$(CC) $(CFLAGS) pi_par.c -o pi_par
+
+run: pi_seq pi_par
+	./pi_seq
+	./pi_par
 
 clean:
-	rm $(EXE)
+	rm -f pi_seq pi_par
