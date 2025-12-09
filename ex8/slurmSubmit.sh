@@ -19,7 +19,7 @@
 # Parameters (override by editing here)
 N=45
 CUTOFF=25
-THREADS=16
+THREADS=8
 
 # Sum taskloop parameters
 N_SUM=50000000      # elements (50M ~ 400 MB)
