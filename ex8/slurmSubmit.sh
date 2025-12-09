@@ -23,7 +23,7 @@ THREADS=8
 
 # Sum taskloop parameters
 N_SUM=50000000      # elements (50M ~ 400 MB)
-GRAINSIZE=0         # 0 lets OpenMP choose; set >0 to force chunk size
+GRAINSIZE=10000         # 0 lets OpenMP choose; set >0 to force chunk size
 NUM_TASKS=0         # alternative to grainsize; set >0 to request task count
 
 # Change to your project directory on the cluster
