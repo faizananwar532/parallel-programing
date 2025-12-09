@@ -17,9 +17,9 @@
 #SBATCH --error=/home/fd0002007/out/fib_tasks.err.%j
 
 # Parameters (override by editing here)
-N=45
-CUTOFF=20
-THREADS=8
+N=50
+CUTOFF=10
+THREADS=16
 
 # Change to your project directory on the cluster
 cd /home/fd0002007/parallel-programing/ex8 || { echo "cd failed"; exit 1; }
