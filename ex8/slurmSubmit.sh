@@ -18,7 +18,7 @@
 
 # Parameters (override by editing here)
 N=50
-CUTOFF=10
+CUTOFF=25
 THREADS=16
 
 # Change to your project directory on the cluster
