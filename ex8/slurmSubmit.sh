@@ -23,8 +23,8 @@ THREADS=8
 
 # Sum taskloop parameters
 N_SUM=50000000      # elements (50M ~ 400 MB)
-GRAINSIZE=10000         # 0 lets OpenMP choose; set >0 to force chunk size
-NUM_TASKS=0         # alternative to grainsize; set >0 to request task count
+GRAINSIZE=0         # 0 lets OpenMP choose; set >0 to force chunk size
+NUM_TASKS=64         # alternative to grainsize; set >0 to request task count
 
 # Change to your project directory on the cluster
 cd /home/fd0002007/parallel-programing/ex8 || { echo "cd failed"; exit 1; }
