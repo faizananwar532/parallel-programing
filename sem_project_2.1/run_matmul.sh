@@ -1,50 +1,32 @@
 #!/usr/bin/env bash
+####### Mail Notify / Job Name / Comment #######
 #SBATCH --job-name="matmul"
+####### Partition #######
 #SBATCH --partition=all
-#SBATCH --time=0-00:20:00
+####### Resources #######
+#SBATCH --time=0-01:00:00
+####### Node Info #######
 #SBATCH --exclusive
-#SBATCH --nodes=1
+#SBATCH --nodes=8
 #SBATCH --ntasks-per-node=64
+#SBATCH --output=/home/fd0002007/parallel-programming/mpi/matmul.out.%j
+#SBATCH --error=/home/fd0002007/parallel-programming/mpi/matmul.err.%j
 
-####### Output #######
-#SBATCH --output=/home/fd0002007/out/matmul_%N_nodes.out.%j
-#SBATCH --error=/home/fd0002007/out/matmul_%N_nodes.err.%j
+cd /home/fd0002007/parallel-programming/mpi
 
-# Usage:
-#   sbatch --nodes=1 run_matmul.sh
-#   sbatch --nodes=2 run_matmul.sh
-#   sbatch --nodes=4 run_matmul.sh
-#   sbatch --nodes=6 run_matmul.sh
-#   sbatch --nodes=8 run_matmul.sh
+MPIRUN=/etc/profiles/per-group/cluster/bin/mpirun
 
-module load gcc/14.3.0 2>/dev/null
-module load openmpi 2>/dev/null
+#$MPIRUN -np $SLURM_NTASKS ./matmul 8000 42 0
 
-make clean
-make
+REPEATS=5
 
-TOTAL_PROCS=$(($SLURM_NNODES * 64))
-N=8000
-SEED=42
-RUNS=3
-
-echo "============================================"
-echo "Nodes: $SLURM_NNODES  |  Total processes: $TOTAL_PROCS"
-echo "Matrix size: ${N}x${N}, Seed: ${SEED}, Runs: ${RUNS}"
-echo "============================================"
-
-echo ""
-echo "--- Verification (n=4, verbose=1) ---"
-mpirun -np $TOTAL_PROCS ./matmul 4 ${SEED} 1
-
-echo ""
-echo "--- Performance (n=${N}, verbose=0) ---"
-for run in $(seq 1 $RUNS); do
-    echo "--- Run $run ---"
-    mpirun -np $TOTAL_PROCS ./matmul $N $SEED 0
+for NODES in 1 2 4 6 8; do
+    NP=$((NODES * 64))
+    echo "=============================="
+    echo "Running with $NODES nodes and $NP MPI processes"
+    echo "=============================="
+    for RUN in $(seq 1 $REPEATS); do
+        echo "--- Run $RUN/$REPEATS ---"
+        $MPIRUN -np $NP ./matmul 8000 42 0
+    done
 done
-
-echo ""
-echo "============================================"
-echo "All runs complete."
-echo "============================================"
