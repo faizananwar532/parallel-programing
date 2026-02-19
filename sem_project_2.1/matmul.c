@@ -107,16 +107,11 @@ int main(int argc, char **argv) {
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-    if (argc < 4) {
-        if (rank == 0)
-            fprintf(stderr, "Usage: mpirun -np <P> ./matmul <n> <seed> <verbose>\n");
-        MPI_Finalize();
-        return 1;
-    }
+    int n       = (argc > 1) ? atoi(argv[1]) : 8000;
+    int seed    = (argc > 2) ? atoi(argv[2]) : 42;
+    int verbose = (argc > 3) ? atoi(argv[3]) : 0;
 
-    int n = atoi(argv[1]);
-    SEED = atoi(argv[2]);
-    int verbose = atoi(argv[3]);
+    SEED = seed;
     MATRIX_SIZE = n;
 
     double start_time = MPI_Wtime();
