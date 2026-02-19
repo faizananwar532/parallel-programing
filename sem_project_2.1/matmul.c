@@ -1,12 +1,22 @@
 /*
- * Parallel Matrix Multiplication using MPI
- * Strategy: Row-wise block distribution with cache-optimized tiled multiplication
+ * matmul.c — Parallel MPI Matrix Multiplication (Strategy 2)
  *
- * Each process:
- *   1. Initializes its own rows of A locally (no scatter needed)
- *   2. Initializes the full B matrix locally (deterministic, no broadcast needed)
- *   3. Computes its rows of C using tiled i,k,j loop order
- *   4. Sends its rows of C to rank 0 via MPI_Gatherv
+ * Parallelization: Row-block distribution with ring-based B shifting
+ *   - Rank 0 initializes A and B
+ *   - Rows of A are distributed via MPI_Scatterv (Lecture 11)
+ *   - Row-blocks of B are distributed via MPI_Scatterv (Lecture 11)
+ *   - Each process holds only 1/P of B at any time (memory efficient)
+ *   - B blocks are rotated through a ring using MPI_Sendrecv (Lecture 11)
+ *   - After P ring steps, each process has seen all of B and computed its full C rows
+ *   - Result rows are collected at rank 0 via MPI_Gatherv (Lecture 11)
+ *
+ * MPI concepts used (all from lecture slides):
+ *   Lecture 09: MPI_Init, MPI_Finalize, MPI_Comm_rank, MPI_Comm_size,
+ *              MPI_COMM_WORLD, MPI_DOUBLE, MPI_STATUS_IGNORE
+ *   Lecture 10: MPI_Wtime
+ *   Lecture 11: MPI_Scatterv, MPI_Gatherv, MPI_Sendrecv
+ *
+ * Usage: mpirun -np <P> ./matmul n seed verbose
  *
  * Author: [Your Name]
  * AI tools were used as a reference during development (Cursor AI).
@@ -17,19 +27,10 @@
 #include <string.h>
 #include <mpi.h>
 
-#define BLOCK_SIZE 64
+/* ---- RNG functions from row_wise_matrix_mult.c ---- */
 
-static int MATRIX_SIZE;
-static int SEED;
-
-unsigned concatenate(unsigned x, unsigned y) {
-    unsigned pow = 10;
-    while (y >= pow)
-        pow *= 10;
-    return x * pow + y;
-}
-
-double my_rand(unsigned long *state, double lower, double upper) {
+double my_rand(unsigned long *state, double lower, double upper)
+{
     *state ^= *state >> 12;
     *state ^= *state << 25;
     *state ^= *state >> 27;
@@ -39,71 +40,45 @@ double my_rand(unsigned long *state, double lower, double upper) {
     return lower + (upper - lower) * u;
 }
 
-static void fill_local_rows(double *arr, int row_start, int num_rows, int value) {
-    for (int i = 0; i < num_rows; i++) {
-        int global_i = row_start + i;
-        for (int j = 0; j < MATRIX_SIZE; j++) {
-            unsigned long state = concatenate(global_i, j) + SEED + value;
-            arr[i * MATRIX_SIZE + j] = my_rand(&state, 0, 1);
+unsigned concatenate(unsigned x, unsigned y)
+{
+    unsigned pow = 10;
+    while (y >= pow)
+        pow *= 10;
+    return x * pow + y;
+}
+
+/* ---- Matrix helpers ---- */
+
+void fillMatrix(double *arr, int n, int seed, int value)
+{
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            unsigned long state = concatenate(i, j) + seed + value;
+            arr[i * n + j] = my_rand(&state, 0, 1);
         }
     }
 }
 
-static void fill_matrix(double *arr, int value) {
-    for (int i = 0; i < MATRIX_SIZE; i++) {
-        for (int j = 0; j < MATRIX_SIZE; j++) {
-            unsigned long state = concatenate(i, j) + SEED + value;
-            arr[i * MATRIX_SIZE + j] = my_rand(&state, 0, 1);
-        }
-    }
-}
-
-static void print_matrix(const char *name, double *mat, int rows, int cols) {
-    printf("%s:\n", name);
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
+void printMatrix(const char *label, double *arr, int n)
+{
+    printf("%s:\n", label);
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
             if (j > 0) printf(" ");
-            printf("%f", mat[i * cols + j]);
+            printf("%f", arr[i * n + j]);
         }
         printf("\n");
     }
 }
 
-/*
- * Tiled matrix multiplication kernel: C += A * B
- * Uses i,k,j loop order with blocking for cache efficiency.
- * A is (my_rows x n), B is (n x n), C is (my_rows x n).
- */
-static void matmul_tiled(double *A, double *B, double *C, int my_rows, int n) {
-    for (int ii = 0; ii < my_rows; ii += BLOCK_SIZE) {
-        int i_end = ii + BLOCK_SIZE;
-        if (i_end > my_rows) i_end = my_rows;
+/* ---- Main ---- */
 
-        for (int kk = 0; kk < n; kk += BLOCK_SIZE) {
-            int k_end = kk + BLOCK_SIZE;
-            if (k_end > n) k_end = n;
-
-            for (int jj = 0; jj < n; jj += BLOCK_SIZE) {
-                int j_end = jj + BLOCK_SIZE;
-                if (j_end > n) j_end = n;
-
-                for (int i = ii; i < i_end; i++) {
-                    for (int k = kk; k < k_end; k++) {
-                        double a_ik = A[i * n + k];
-                        for (int j = jj; j < j_end; j++) {
-                            C[i * n + j] += a_ik * B[k * n + j];
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-int main(int argc, char **argv) {
-    MPI_Init(&argc, &argv);
-
+int main(int argc, char *argv[])
+{
     int rank, size;
+
+    MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
@@ -111,91 +86,156 @@ int main(int argc, char **argv) {
     int seed    = (argc > 2) ? atoi(argv[2]) : 42;
     int verbose = (argc > 3) ? atoi(argv[3]) : 0;
 
-    SEED = seed;
-    MATRIX_SIZE = n;
+    double t_start = MPI_Wtime();
 
-    double start_time = MPI_Wtime();
-
-    /* --- Row distribution ------------------------------------------------ */
+    /* ---- Row distribution (same formula for A rows and B row-blocks) ---- */
     int base_rows = n / size;
     int remainder = n % size;
-    int my_rows = base_rows + (rank < remainder ? 1 : 0);
-    int my_start = rank * base_rows + (rank < remainder ? rank : remainder);
 
-    /* --- Allocate memory ------------------------------------------------- */
-    double *local_A = (double *)malloc((size_t)my_rows * n * sizeof(double));
-    double *B       = (double *)malloc((size_t)n * n * sizeof(double));
-    double *local_C = (double *)calloc((size_t)my_rows * n, sizeof(double));
+    int *row_counts  = (int *)malloc(size * sizeof(int));
+    int *row_offsets = (int *)malloc(size * sizeof(int));
+    int *sendcounts  = (int *)malloc(size * sizeof(int));
+    int *displs      = (int *)malloc(size * sizeof(int));
 
-    if (!local_A || !B || !local_C) {
-        fprintf(stderr, "Rank %d: memory allocation failed\n", rank);
-        MPI_Finalize();
-        return 1;
+    int max_block_rows = base_rows + (remainder > 0 ? 1 : 0);
+    int offset = 0;
+    for (int r = 0; r < size; r++) {
+        row_counts[r]  = base_rows + (r < remainder ? 1 : 0);
+        row_offsets[r]  = offset;
+        sendcounts[r] = row_counts[r] * n;
+        displs[r]     = offset * n;
+        offset += row_counts[r];
     }
 
-    /* --- Initialize matrices locally (no communication!) ----------------- */
-    fill_local_rows(local_A, my_start, my_rows, 0);
-    fill_matrix(B, 1);
+    int my_rows   = row_counts[rank];
 
-    /* --- Tiled matrix multiplication ------------------------------------- */
-    matmul_tiled(local_A, B, local_C, my_rows, n);
-
-    /* --- Gather C on rank 0 ---------------------------------------------- */
+    /* ---- Allocate memory ---- */
+    double *A = NULL;
+    double *B = NULL;
     double *C = NULL;
-    int *recvcounts = NULL;
-    int *displs = NULL;
 
+    double *A_local = (double *)malloc((size_t)my_rows * n * sizeof(double));
+    double *C_local = (double *)calloc((size_t)my_rows * n, sizeof(double));
+
+    /* Two B-block buffers for ring rotation (sized for largest possible block) */
+    double *B_block = (double *)malloc((size_t)max_block_rows * n * sizeof(double));
+    double *B_recv  = (double *)malloc((size_t)max_block_rows * n * sizeof(double));
+
+    /* ---- Rank 0 initializes full A and B ---- */
     if (rank == 0) {
+        A = (double *)malloc((size_t)n * n * sizeof(double));
+        B = (double *)malloc((size_t)n * n * sizeof(double));
         C = (double *)malloc((size_t)n * n * sizeof(double));
-        recvcounts = (int *)malloc(size * sizeof(int));
-        displs = (int *)malloc(size * sizeof(int));
+        fillMatrix(A, n, seed, 0);
+        fillMatrix(B, n, seed, 1);
+    }
 
-        int offset = 0;
-        for (int r = 0; r < size; r++) {
-            int r_rows = base_rows + (r < remainder ? 1 : 0);
-            recvcounts[r] = r_rows * n;
-            displs[r] = offset;
-            offset += r_rows * n;
+    /* ---- Distribute rows of A (MPI_Scatterv, Lecture 11) ---- */
+    MPI_Scatterv(A, sendcounts, displs, MPI_DOUBLE,
+                 A_local, my_rows * n, MPI_DOUBLE,
+                 0, MPI_COMM_WORLD);
+
+    /* ---- Distribute row-blocks of B (MPI_Scatterv, Lecture 11) ---- */
+    MPI_Scatterv(B, sendcounts, displs, MPI_DOUBLE,
+                 B_block, my_rows * n, MPI_DOUBLE,
+                 0, MPI_COMM_WORLD);
+
+    /* Rank 0 can free full B now (it has its own block in B_block) */
+    if (rank == 0) {
+        free(B);
+        B = NULL;
+    }
+
+    /* ---- Ring-based multiplication ---- */
+    /*
+     * Each process starts with B row-block from its own rank.
+     * In each step:
+     *   1. Compute partial C using the current B block
+     *      C_local[i][j] += A_local[i][k] * B_block[k_local][j]
+     *      where k ranges over the rows belonging to the current block's source rank
+     *   2. Shift the B block to the left neighbor via MPI_Sendrecv
+     *   3. Receive the next B block from the right neighbor
+     * After 'size' steps, every process has seen all B blocks → C_local is complete.
+     */
+    int left  = (rank - 1 + size) % size;
+    int right = (rank + 1) % size;
+    int current_source = rank;
+
+    for (int step = 0; step < size; step++) {
+        int src_rows   = row_counts[current_source];
+        int src_offset = row_offsets[current_source];
+
+        /* Partial multiply: i,k,j loop order for cache efficiency */
+        for (int i = 0; i < my_rows; i++) {
+            for (int k = 0; k < src_rows; k++) {
+                double a_ik = A_local[i * n + (src_offset + k)];
+                for (int j = 0; j < n; j++) {
+                    C_local[i * n + j] += a_ik * B_block[k * n + j];
+                }
+            }
+        }
+
+        /* Ring shift B block: send left, receive from right (MPI_Sendrecv, Lecture 11) */
+        if (step < size - 1) {
+            int next_source = (current_source + 1) % size;
+            int send_count  = src_rows * n;
+            int recv_count  = row_counts[next_source] * n;
+
+            MPI_Sendrecv(B_block, send_count, MPI_DOUBLE, left, 0,
+                         B_recv, recv_count, MPI_DOUBLE, right, 0,
+                         MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+            /* Swap buffers */
+            double *tmp = B_block;
+            B_block = B_recv;
+            B_recv  = tmp;
+
+            current_source = next_source;
         }
     }
 
-    MPI_Gatherv(local_C, my_rows * n, MPI_DOUBLE,
-                C, recvcounts, displs, MPI_DOUBLE,
+    /* ---- Gather result rows at rank 0 (MPI_Gatherv, Lecture 11) ---- */
+    MPI_Gatherv(C_local, my_rows * n, MPI_DOUBLE,
+                C, sendcounts, displs, MPI_DOUBLE,
                 0, MPI_COMM_WORLD);
 
-    /* --- Output (rank 0 only) -------------------------------------------- */
+    /* ---- Output (rank 0 only) ---- */
     if (rank == 0) {
         if (verbose == 1 && n <= 10) {
-            double *full_A = (double *)malloc((size_t)n * n * sizeof(double));
-            fill_matrix(full_A, 0);
-            print_matrix("Matrix A", full_A, n, n);
-            free(full_A);
+            printMatrix("Matrix A", A, n);
 
-            print_matrix("Matrix B", B, n, n);
-            print_matrix("Matrix C (Result)", C, n, n);
+            /* Regenerate B for printing (was freed after scatter) */
+            double *B_print = (double *)malloc((size_t)n * n * sizeof(double));
+            fillMatrix(B_print, n, seed, 1);
+            printMatrix("Matrix B", B_print, n);
+            free(B_print);
+
+            printMatrix("Matrix C (Result)", C, n);
         }
 
         double checksum = 0.0;
-        for (int i = 0; i < n; i++)
-            for (int j = 0; j < n; j++)
-                checksum += C[i * n + j];
-
+        for (int i = 0; i < n * n; i++)
+            checksum += C[i];
         printf("Checksum: %f\n", checksum);
     }
 
-    double end_time = MPI_Wtime();
+    double t_end = MPI_Wtime();
 
     if (rank == 0)
-        printf("Execution time with %d ranks: %.2f s\n", size, end_time - start_time);
+        printf("Execution time with %d ranks: %.2f s\n", size, t_end - t_start);
 
-    /* --- Cleanup --------------------------------------------------------- */
-    free(local_A);
-    free(B);
-    free(local_C);
+    /* ---- Cleanup ---- */
+    free(A_local);
+    free(C_local);
+    free(B_block);
+    free(B_recv);
+    free(row_counts);
+    free(row_offsets);
+    free(sendcounts);
+    free(displs);
     if (rank == 0) {
+        free(A);
         free(C);
-        free(recvcounts);
-        free(displs);
     }
 
     MPI_Finalize();
