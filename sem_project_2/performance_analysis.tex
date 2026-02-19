@@ -1,0 +1,95 @@
+\documentclass[a4paper,11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{booktabs}
+\usepackage{graphicx}
+
+\title{Performance Analysis -- Parallel Matrix Multiplication}
+\author{Your Name(s)}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section*{Analysis of row\_wise\_matrix\_mult.c}
+
+The reference implementation uses a master--worker pattern where rank~0 coordinates
+all communication.  Several design decisions cause poor scalability:
+
+\textbf{Excessive communication:}
+Matrix~$B$ is broadcast row-by-row in $n$ separate \texttt{MPI\_Bcast} calls rather
+than a single broadcast of the full matrix.  Each row of~$A$ is sent individually
+via \texttt{MPI\_Send}, and computed result rows are returned via \texttt{MPI\_Recv},
+creating $\mathcal{O}(n)$ point-to-point messages.
+
+\textbf{Master bottleneck:}
+Rank~0 never computes --- it only dispatches rows and collects results.  Workers
+idle while waiting for their next row, and rank~0 serializes all communication.
+
+\textbf{Cache-unfriendly access:}
+Matrices use \texttt{double**} (scattered heap allocations).  The multiplication
+function accesses $B$ column-wise (\texttt{arr[j][i]}), causing stride-$n$ memory
+access --- worst-case for CPU caches.
+
+% Insert measured data for reference implementation here if available.
+
+
+\section*{Analysis of Your Implementation(s)}
+
+\subsection*{Strategy 1: Row-block with collectives (\texttt{matmul.c})}
+
+Rank~0 initializes $A$ and $B$.  $B$ is broadcast to all processes via a single
+\texttt{MPI\_Bcast}.  Rows of $A$ are distributed via \texttt{MPI\_Scatterv}, each
+process computes its rows of $C$, and a single \texttt{MPI\_Gatherv} collects the
+result at rank~0.
+
+Communication: 1$\times$\texttt{MPI\_Bcast}($n^2$) + 1$\times$\texttt{MPI\_Scatterv}($n^2$)
++ 1$\times$\texttt{MPI\_Gatherv}($n^2$) = 3 collective calls total.
+
+\subsection*{Strategy 2: Inner-dimension split with Reduce (\texttt{matmul\_v2.c})}
+
+Each process locally initializes only the $A$-columns and $B$-rows it needs
+(zero-communication setup).  Each process computes a partial $n \times n$ matrix,
+and a single \texttt{MPI\_Reduce(MPI\_SUM)} combines them at rank~0.
+
+Communication: 1$\times$\texttt{MPI\_Reduce}($n^2$).  No initialization communication.
+
+\subsection*{Comparison}
+
+% === FILL IN with measured times ===
+\begin{table}[h]
+\centering
+\begin{tabular}{rrrrrrr}
+\toprule
+       &           & \multicolumn{2}{c}{Strategy 1} & \multicolumn{2}{c}{Strategy 2} \\
+\cmidrule(lr){3-4} \cmidrule(lr){5-6}
+Nodes  & Processes & Time (s) & Speedup & Time (s) & Speedup \\
+\midrule
+1      & 64        & TODO     & 1.00    & TODO     & 1.00    \\
+2      & 128       & TODO     & TODO    & TODO     & TODO    \\
+4      & 256       & TODO     & TODO    & TODO     & TODO    \\
+6      & 384       & TODO     & TODO    & TODO     & TODO    \\
+8      & 512       & TODO     & TODO    & TODO     & TODO    \\
+\bottomrule
+\end{tabular}
+\caption{Execution times and speedup ($n = 8000$, seed = 42, averaged over 3 runs).}
+\end{table}
+
+% === INSERT speedup plot ===
+% \includegraphics[width=0.7\textwidth]{speedup_plot.png}
+
+\textbf{Scalability:}
+Strategy~1 requires 3 collective calls but each transfers at most $\mathcal{O}(n^2)$.
+Strategy~2 requires only 1 collective but it always transfers the full $n^2$ matrix
+in the reduction, regardless of process count.
+% TODO: Reference your measured data.
+
+\textbf{Memory:}
+Strategy~1 stores full $B$ on every process ($n^2$ doubles).
+Strategy~2 stores only $n \times n/p$ columns of $A$ and $n/p \times n$ rows of $B$
+per process, but needs a full $n \times n$ partial-$C$ buffer.
+
+\textbf{Conclusion:}
+% TODO: Fill based on your actual measurements.
+
+\end{document}

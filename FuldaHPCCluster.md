@@ -107,3 +107,7 @@ Cancel all jobs owned by your account:
 scancel -u fd-your-number
 ```
 </div></pre>
+
+
+
+scp -r -o PreferredAuthentications=password -o PubkeyAuthentication=no fd0002007@hpc.informatik.hs-fulda.de:~/sem_project_2 "/Users/faizi/Documents/gsd_winter_25/parallel programing/"
