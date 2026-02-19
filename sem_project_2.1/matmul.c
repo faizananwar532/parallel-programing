@@ -1,20 +1,20 @@
 /*
- * matmul.c — Parallel MPI Matrix Multiplication (Strategy 2)
+ * matmul.c — Parallel MPI Matrix Multiplication (Strategy 2 — Improved)
  *
  * Parallelization: Row-block distribution with ring-based B shifting
- *   - Rank 0 initializes A and B
- *   - Rows of A are distributed via MPI_Scatterv (Lecture 11)
- *   - Row-blocks of B are distributed via MPI_Scatterv (Lecture 11)
- *   - Each process holds only 1/P of B at any time (memory efficient)
- *   - B blocks are rotated through a ring using MPI_Sendrecv (Lecture 11)
- *   - After P ring steps, each process has seen all of B and computed its full C rows
- *   - Result rows are collected at rank 0 via MPI_Gatherv (Lecture 11)
+ *   and non-blocking communication/computation overlap.
+ *
+ * Improvement over the basic ring version:
+ *   BEFORE: MPI_Sendrecv (blocking) — processes idle during communication
+ *   AFTER:  MPI_Isend + MPI_Irecv (non-blocking) — processes compute while
+ *           the next B block is being transferred in the background
  *
  * MPI concepts used (all from lecture slides):
  *   Lecture 09: MPI_Init, MPI_Finalize, MPI_Comm_rank, MPI_Comm_size,
- *              MPI_COMM_WORLD, MPI_DOUBLE, MPI_STATUS_IGNORE
- *   Lecture 10: MPI_Wtime
- *   Lecture 11: MPI_Scatterv, MPI_Gatherv, MPI_Sendrecv
+ *              MPI_COMM_WORLD, MPI_DOUBLE
+ *   Lecture 10: MPI_Wtime, MPI_Isend, MPI_Irecv (non-blocking communication)
+ *   Lecture 10: MPI_Waitall (completion of non-blocking operations)
+ *   Lecture 11: MPI_Scatterv, MPI_Gatherv
  *
  * Usage: mpirun -np <P> ./matmul n seed verbose
  *
@@ -88,7 +88,7 @@ int main(int argc, char *argv[])
 
     double t_start = MPI_Wtime();
 
-    /* ---- Row distribution (same formula for A rows and B row-blocks) ---- */
+    /* ---- Row distribution ---- */
     int base_rows = n / size;
     int remainder = n % size;
 
@@ -107,7 +107,7 @@ int main(int argc, char *argv[])
         offset += row_counts[r];
     }
 
-    int my_rows   = row_counts[rank];
+    int my_rows = row_counts[rank];
 
     /* ---- Allocate memory ---- */
     double *A = NULL;
@@ -117,7 +117,7 @@ int main(int argc, char *argv[])
     double *A_local = (double *)malloc((size_t)my_rows * n * sizeof(double));
     double *C_local = (double *)calloc((size_t)my_rows * n, sizeof(double));
 
-    /* Two B-block buffers for ring rotation (sized for largest possible block) */
+    /* Three B-block buffers: one for computing, one for sending, one for receiving */
     double *B_block = (double *)malloc((size_t)max_block_rows * n * sizeof(double));
     double *B_recv  = (double *)malloc((size_t)max_block_rows * n * sizeof(double));
 
@@ -140,22 +140,21 @@ int main(int argc, char *argv[])
                  B_block, my_rows * n, MPI_DOUBLE,
                  0, MPI_COMM_WORLD);
 
-    /* Rank 0 can free full B now (it has its own block in B_block) */
     if (rank == 0) {
         free(B);
         B = NULL;
     }
 
-    /* ---- Ring-based multiplication ---- */
+    /* ---- Ring-based multiplication with non-blocking overlap ---- */
     /*
-     * Each process starts with B row-block from its own rank.
-     * In each step:
-     *   1. Compute partial C using the current B block
-     *      C_local[i][j] += A_local[i][k] * B_block[k_local][j]
-     *      where k ranges over the rows belonging to the current block's source rank
-     *   2. Shift the B block to the left neighbor via MPI_Sendrecv
-     *   3. Receive the next B block from the right neighbor
-     * After 'size' steps, every process has seen all B blocks → C_local is complete.
+     * Key improvement: instead of blocking MPI_Sendrecv, we use
+     * MPI_Isend + MPI_Irecv to START the transfer of the next B block,
+     * then COMPUTE with the current B block while data moves in the
+     * background. MPI_Waitall ensures the transfer is done before we
+     * swap buffers.
+     *
+     * This overlaps communication with computation, hiding network
+     * latency behind useful work.
      */
     int left  = (rank - 1 + size) % size;
     int right = (rank + 1) % size;
@@ -165,7 +164,22 @@ int main(int argc, char *argv[])
         int src_rows   = row_counts[current_source];
         int src_offset = row_offsets[current_source];
 
-        /* Partial multiply: i,k,j loop order for cache efficiency */
+        MPI_Request requests[2];
+        int next_source = (current_source + 1) % size;
+
+        /* Step 1: Start non-blocking ring shift (MPI_Isend + MPI_Irecv, Lecture 10) */
+        if (step < size - 1) {
+            int send_count = src_rows * n;
+            int recv_count = row_counts[next_source] * n;
+
+            MPI_Isend(B_block, send_count, MPI_DOUBLE, left, step,
+                      MPI_COMM_WORLD, &requests[0]);
+            MPI_Irecv(B_recv, recv_count, MPI_DOUBLE, right, step,
+                      MPI_COMM_WORLD, &requests[1]);
+        }
+
+        /* Step 2: Compute partial C while communication happens in background */
+        /* B_block is only READ here, safe to use during MPI_Isend */
         for (int i = 0; i < my_rows; i++) {
             for (int k = 0; k < src_rows; k++) {
                 double a_ik = A_local[i * n + (src_offset + k)];
@@ -175,17 +189,11 @@ int main(int argc, char *argv[])
             }
         }
 
-        /* Ring shift B block: send left, receive from right (MPI_Sendrecv, Lecture 11) */
+        /* Step 3: Wait for transfer to complete (MPI_Waitall, Lecture 10) */
         if (step < size - 1) {
-            int next_source = (current_source + 1) % size;
-            int send_count  = src_rows * n;
-            int recv_count  = row_counts[next_source] * n;
+            MPI_Waitall(2, requests, MPI_STATUSES_IGNORE);
 
-            MPI_Sendrecv(B_block, send_count, MPI_DOUBLE, left, 0,
-                         B_recv, recv_count, MPI_DOUBLE, right, 0,
-                         MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-
-            /* Swap buffers */
+            /* Swap buffers: B_recv becomes the new B_block for next step */
             double *tmp = B_block;
             B_block = B_recv;
             B_recv  = tmp;
@@ -204,7 +212,6 @@ int main(int argc, char *argv[])
         if (verbose == 1 && n <= 10) {
             printMatrix("Matrix A", A, n);
 
-            /* Regenerate B for printing (was freed after scatter) */
             double *B_print = (double *)malloc((size_t)n * n * sizeof(double));
             fillMatrix(B_print, n, seed, 1);
             printMatrix("Matrix B", B_print, n);
